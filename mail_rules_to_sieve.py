@@ -1,62 +1,131 @@
 import plistlib
+from urlparse import urlparse
+import codecs
+import sys 
+UTF8Writer = codecs.getwriter('utf8')
+sys.stdout = UTF8Writer(sys.stdout)
 
-p = plistlib.readPlist('MessageRules.plist')
+prefix = '' # INBOX
+myAccount = '<my_account_path>'
+
+p = plistlib.readPlist('SyncedRules.plist')
+activestate = plistlib.readPlist('RulesActiveState.plist')
 
 print '''
-require ["fileinto", "reject"];
+require ["fileinto", "reject", "body", "mailbox"];
 '''
-stmt = 'if'
-def handle(header, expression, mbox):
-    global stmt
+def handleAnyRecipient(matchType, match, expression):
+    print 'address %s %s  "%s"' % (matchType, match, expression),
+    
+def handle(matchType, header, expression):
     if header in ('To', 'Cc', 'From'):
-        print stmt, 'address :contains ["%s"]  "%s" { fileinto "INBOX.%s"; }' % (header, expression, mbox)
+        print 'address %s ["%s"]  "%s"' % (matchType, header, expression),
     elif header == 'Subject':
-        print stmt, 'header :matches "Subject" ["*%s*"] { fileinto "INBOX.%s"; }' % (expression, mbox)
+        print 'header %s "Subject" "%s"' % (matchType, expression),
     elif header == 'List-Id':
-        print stmt, 'header :matches "List-Id" ["*%s*"] { fileinto "INBOX.%s"; }' % (expression, mbox)
+        print 'header %s "List-Id" "%s"' % (matchType, expression),
     elif header == 'X-LSV-ListID':
-        print stmt, 'header :matches "X-LSV-ListID" ["*%s*"] { fileinto "INBOX.%s"; }' % (expression, mbox)
+        print 'header %s "X-LSV-ListID" "%s"' % (matchType, expression),
     elif header == 'Mailing-List':
-        print stmt, 'header :matches "Mailing-List" ["*%s*"] { fileinto "INBOX.%s"; }' % (expression, mbox)
+        print 'header %s "Mailing-List" "%s"' % (matchType, expression),
     elif header == 'List-Help':
-        print stmt, 'header :matches "List-Help" ["*%s*"] { fileinto "INBOX.%s"; }' % (expression, mbox)
+        print 'header %s "List-Help" "%s"' % (matchType, expression),
     elif header == 'List-Unsubscribe':
-        print stmt, 'header :matches "List-Unsubscribe" ["*%s*"] { fileinto "INBOX.%s"; }' % (expression, mbox)
+        print 'header %s "List-Unsubscribe" "%s"' % (matchType, expression),
     elif header == 'Sender':
-        print stmt, 'header :matches "Sender" ["*%s*"] { fileinto "INBOX.%s"; }' % (expression, mbox)
+        print 'header %s "Sender" "%s"' % (matchType, expression),
     elif header == 'Approved-By':
-        print stmt, 'header :matches "Approved-By" ["*%s*"] { fileinto "INBOX.%s"; }' % (expression, mbox)
+        print 'header %s "Approved-By" "%s"' % (matchType, expression),
     elif header == 'Delivered-To':
-        print stmt, 'header :matches "Delivered-To" ["*%s*"] { fileinto "INBOX.%s"; }' % (expression, mbox)
+        print 'header %s "Delivered-To" "%s"' % (matchType, expression),
     elif header == 'Return-Path':
-        print stmt, 'header :matches "Return-Path" ["*%s*"] { fileinto "INBOX.%s"; }' % (expression, mbox)
+        print 'header %s "Return-Path" "%s"' % (matchType, expression),
     elif header == 'Message-Id':
-        print stmt, 'header :matches "Message-Id" ["*%s*"] { fileinto "INBOX.%s"; }' % (expression, mbox)
+        print 'header %s "Message-Id" "%s"' % (matchType, expression),
     elif header == 'X-Quarantine-Id':
-        print stmt, 'header :matches "X-Quarantine-Id" ["*%s*"] { fileinto "INBOX.%s"; }' % (expression, mbox)
+        print 'header %s "X-Quarantine-Id" "%s"' % (matchType, expression),
     elif header == 'Received':
-        print stmt, 'header :matches "Received" ["*%s*"] { fileinto "INBOX.%s"; }' % (expression, mbox)
+        print 'header %s "Received" "%s"' % (matchType, expression),
+    elif header == 'Body':
+        print 'body :text %s "%s"' % (matchType, expression),
     elif header == 'Account':
-        print "# Account is %s and %s" % (expression, mbox)
+        pass
     else:
         raise ValueError(header)
-    stmt = 'elsif'
 
-for rule in p['rules']:
+def bool_is_true(b):
+    #print '# b is ' + str(b) + ' and ' + str((b in ['YES', 'true', 'True', '1', True]))
+    if b is None:
+        return False
+    return (b in ['YES', 'true', 'True', '1', True])
+
+# like imap://alexr@localhost/LLVM/llvm-lab-wg
+def imap_mbox_path(u):
+    o = urlparse(u)
+    return o.path.strip('/')
+
+stmt = 'if'
+for rule in p:
     if 'Mailbox' not in rule: continue
     mbox = rule['Mailbox'].split('/')[-1].split('.')[0]
-    print '#', rule['RuleName'], '->', mbox
-    if rule['Active'] != 1:
-        print '# ',
-    for criteria in rule['Criteria']:
-        if criteria['Header'] == 'AnyRecipient':
-            handle('To', criteria['Expression'], mbox)
-            handle('Cc', criteria['Expression'], mbox)
-        elif criteria['Header'] == 'IsJunkMail':
-            print "# IsJunkMail for %s" % (mbox)
-        else:
-            handle(criteria['Header'], criteria['Expression'], mbox)
+    mbox_path = prefix + imap_mbox_path(rule['CopyToMailboxURL'])
 
+    keep = ' keep;' if bool_is_true(rule.get('ShouldCopyMessage')) else ''
+    stop = ' stop;' if bool_is_true(rule.get('StopEvaluatingRules')) else ''
+    action = '{ fileinto :create "%s";%s%s }' % (mbox_path, keep, stop)
+    
+#    print '#', rule['RuleName'], '->', mbox
+    isActive = True
+    #if not bool_is_true(rule.get('Active', '0')):
+    #    isActive = False
+    #print '# Rule %s is %s' % (rule['RuleId'], activestate[rule['RuleId']])
+    if not bool_is_true(activestate[rule['RuleId']]):
+        isActive = False
+    if (not isActive): print '# ',
+    print stmt,
+    stmt = 'elsif'
+    
+    isAll = (bool_is_true(rule['AllCriteriaMustBeSatisfied']))
+    if isAll:
+        print 'allof (',
+    else:
+        print 'anyof (',
+    
+    firstCriteria = True
+    for criteria in rule['Criteria']:
+        header = criteria['Header']
+        expression = criteria.get('Expression')
+        matchType = ':matches'
+
+        qual = criteria.get('Qualifier')
+        if qual == 'BeginsWith':
+            expression = expression + '*'
+        elif qual == 'EndsWith':
+            expression = '*' + expression
+        elif qual == 'IsEqualTo':
+            matchType = ':is'
+        else:
+            matchType = ':contains'
+            
+        # do we have an AllCriteria where one is a match for the account we're processing?
+        if (isAll and (criteria['Header'] == 'Account') and (expression == myAccount)):
+            isAll = 0
+            continue
+            
+        if (not firstCriteria): print ', '
+        if (not firstCriteria) and (not isActive): print '# ',
+        firstCriteria = False
+        if header == 'AnyRecipient':
+            handleAnyRecipient(matchType, '[\"To\", \"CC\"]', expression)
+        elif header == 'IsJunkMail':
+            print "# IsJunkMail for %s" % (mbox_path)
+        else:
+            if 'Expression' in criteria:
+                handle(matchType, header, expression)
+            else:
+                print '# header ', header, ' unhandled'
+    print ') ' + action
+    
 print '''
 else {
      keep;
